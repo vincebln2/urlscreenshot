@@ -1,0 +1,16 @@
+app = "urlscreenshot"
+primary_region = "ord"
+
+[build]
+dockerfile = "Dockerfile"
+
+[http_service]
+internal_port = 8000
+force_https = true
+
+[[vm]]
+memory_mb = 512
+
+[mounts]
+source = "screenshots_data"
+destination = "/app/screenshots"
