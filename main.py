@@ -1,6 +1,8 @@
 import asyncio
 import time
+import threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -11,39 +13,101 @@ app = FastAPI()
 
 screenshots_dir = Path("/app/screenshots")
 screenshots_dir.mkdir(exist_ok=True)
-app.mount("/screenshots", StaticFiles(directory=str(screenshots_dir)), name="screenshots")
+app.mount(
+    "/screenshots", StaticFiles(directory=str(screenshots_dir)), name="screenshots"
+)
+
 
 class ScreenshotRequest(BaseModel):
     url: str
 
-async def screenshot(url: str):
+
+def screenshot_sync_bidi(url: str):
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    
+    options.add_argument("--enable-bidi")
+
     driver = webdriver.Chrome(options=options)
-    driver.get(url)
-    await asyncio.sleep(3)
-    
-    filename = f"screenshot_{int(time.time() * 1000)}.png"
-    filepath = screenshots_dir / filename
-    driver.save_screenshot(str(filepath))
-    driver.quit()
-    
-    return filename
+
+    try:
+        import trio
+
+        async def take_screenshot():
+            async with driver.bidi_connection() as connection:
+                await connection.session.navigate(url)
+                await trio.sleep(3)
+
+            filename = f"screenshot_{int(time.time() * 1000)}.png"
+            filepath = screenshots_dir / filename
+            driver.save_screenshot(str(filepath))
+            return filename
+
+        return trio.run(take_screenshot)
+
+    except Exception:
+        driver.get(url)
+        time.sleep(3)
+        filename = f"screenshot_{int(time.time() * 1000)}.png"
+        filepath = screenshots_dir / filename
+        driver.save_screenshot(str(filepath))
+        return filename
+
+    finally:
+        driver.quit()
+
+
+def screenshot_sync_traditional(url: str):
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+
+    driver = webdriver.Chrome(options=options)
+
+    try:
+        driver.get(url)
+        time.sleep(3)
+        filename = f"screenshot_{int(time.time() * 1000)}.png"
+        filepath = screenshots_dir / filename
+        driver.save_screenshot(str(filepath))
+        return filename
+    finally:
+        driver.quit()
+
+
+executor = ThreadPoolExecutor(max_workers=4)
+
+
+async def screenshot(url: str, use_bidi: bool = True):
+    loop = asyncio.get_event_loop()
+    if use_bidi:
+        try:
+            return await loop.run_in_executor(executor, screenshot_sync_bidi, url)
+        except Exception:
+            return await loop.run_in_executor(
+                executor, screenshot_sync_traditional, url
+            )
+    else:
+        return await loop.run_in_executor(executor, screenshot_sync_traditional, url)
+
 
 @app.post("/screenshot")
 async def post(request: ScreenshotRequest):
     filename = await screenshot(request.url)
     return {"filename": filename, "url": f"/screenshots/{filename}"}
 
+
 @app.get("/screenshot")
-async def get(url: str):
-    filename = await screenshot(url)
+async def get(url: str, bidi: bool = True):
+    filename = await screenshot(url, bidi)
     return {"filename": filename, "url": f"/screenshots/{filename}"}
+
 
 @app.get("/")
 async def root():
