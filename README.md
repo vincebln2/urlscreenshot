@@ -2,8 +2,6 @@
 
 This web service takes screenshots of given URLs using Selenium and Chrome, deployed on fly.io
 
-Uses the BiDi Selenium feature by default but will use WebDriver if BiDi fails.
-
 ### Prerequisites
 
 - Have fly.io CLI installed
